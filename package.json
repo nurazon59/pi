@@ -1,0 +1,23 @@
+{
+  "name": "@nurazon59/pi",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal Pi extensions",
+  "keywords": [
+    "pi-package"
+  ],
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./extensions/statusline.ts",
+      "./extensions/ask-user/index.ts",
+      "./extensions/plan-mode/index.ts"
+    ]
+  }
+}
