@@ -74,13 +74,21 @@ export default function (pi: ExtensionAPI) {
           ? theme.fg("muted", "?")
           : theme.fg(percent < 40 ? "success" : percent <= 70 ? "warning" : "error", `${percent.toFixed(1)}%`);
         const model = live.model;
-        const modelText = model ? theme.fg("accent", model.name || model.id) : theme.fg("muted", "no model");
+        const modelText = model ? theme.fg("text", model.name || model.id) : theme.fg("muted", "no model");
         const effortText = theme.fg("muted", live.thinkingLevel ?? "?");
-        const costText = theme.fg("muted", `$${getSessionCost(live).toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
+        const costText = theme.fg("dim", `$${getSessionCost(live).toFixed(3)}${usingSubscription ? " (sub)" : ""}`);
         const branch = footerData.getGitBranch();
-        const cwd = theme.fg("dim", `${formatCwd(live.cwd)}${branch ? `  ${branch}` : ""}`);
-
-        const line = `${modelText}  ${effortText}  ${costText}  ${percentText}/${formatTokens(contextWindow)}  ${cwd}`;
+        const cwd = theme.fg("accent", formatCwd(live.cwd));
+        const branchText = branch ? theme.fg("success", branch) : "";
+        const separator = theme.fg("dim", "  ›  ");
+        const contextText = `${percentText}${theme.fg("dim", `/${formatTokens(contextWindow)}`)}`;
+        const line = [
+          `${modelText} ${theme.fg("dim", "·")} ${effortText}`,
+          cwd,
+          branchText,
+          contextText,
+          costText,
+        ].filter(Boolean).join(separator);
         return [truncateToWidth(line, width, theme.fg("dim", "…"))];
       },
       dispose: footerData.onBranchChange(() => tui.requestRender()),
