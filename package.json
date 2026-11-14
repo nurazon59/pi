@@ -15,6 +15,7 @@
   },
   "pi": {
     "extensions": [
+      "./extensions/compact-tools.ts",
       "./extensions/statusline.ts",
       "./extensions/ask-user/index.ts",
       "./extensions/plan-mode/index.ts"
