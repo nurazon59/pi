@@ -6,6 +6,9 @@
   "keywords": [
     "pi-package"
   ],
+  "dependencies": {
+    "@0xkahi/pi-vim-keys": "1.2.1"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-agent-core": "*",
@@ -16,6 +19,7 @@
   "pi": {
     "extensions": [
       "./extensions/compact-tools.ts",
+      "./extensions/contextual-ctrl-p.ts",
       "./extensions/statusline.ts",
       "./extensions/ask-user/index.ts",
       "./extensions/plan-mode/index.ts"
