@@ -1,15 +1,17 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { reviewPlan, type PlanStep } from "./tui.ts";
+import { getAgentDir, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { readFile } from "node:fs/promises";
+import { Type } from "typebox";
+import { createPlanFile, updatePlanFile } from "./plan-file.ts";
+import { renderPlanFile, reviewPlan, type PlanFileDisplay, type PlanStep } from "./tui.ts";
 
-const WRITE_TOOLS = new Set(["edit", "write"]);
-const READ_ONLY_COMMANDS = new Set([
-  "cat", "head", "tail", "less", "more", "grep", "rg", "find", "fd", "ls", "pwd", "tree",
-  "git status", "git log", "git diff", "git show", "git branch", "git remote", "git ls-files",
+const READ_ONLY_TOOLS = new Set([
+  "read", "grep", "find", "ls",
+  "lsp_diagnostics", "lsp_goto_definition", "lsp_find_references", "lsp_symbols", "lsp_prepare_rename",
+  "memory_read", "memory_search", "ask_user",
 ]);
-const SHELL_OPERATORS = /[;|&><`$\n\r]/;
-const COMMAND_ESCAPE_FLAGS = /(?:^|\s)(?:-exec(?:dir)?|-delete|-ok(?:dir)?|--pre(?:-glob)?|--output(?:=|\s)|--replace(?:=|\s))/i;
+const DISCOVERY_TOOLS = ["grep", "find", "ls"];
 
 function getAssistantText(message: AgentMessage): string | undefined {
   if (message.role !== "assistant" || !Array.isArray(message.content)) return;
@@ -31,43 +33,86 @@ function extractPlan(text: string): PlanStep[] {
   return steps;
 }
 
-function isReadOnlyCommand(command: string): boolean {
-  if (SHELL_OPERATORS.test(command) || COMMAND_ESCAPE_FLAGS.test(command)) return false;
-  const normalized = command.trim().replace(/\s+/g, " ");
-  if (!normalized) return false;
-  return [...READ_ONLY_COMMANDS].some((allowed) => normalized === allowed || normalized.startsWith(`${allowed} `));
-}
-
-export default function (pi: ExtensionAPI) {
+export default function (pi: ExtensionAPI, options?: { agentDir?: string }) {
   let enabled = false;
   let originalTools: string[] | undefined;
-  let steps: PlanStep[] = [];
+  const originalThinking = new Map<string, ReturnType<ExtensionAPI["getThinkingLevel"]>>();
+  const savedPlans = new Set<string>();
+  const pendingPlans = new Map<string, string>();
+
+  function modelKey(ctx: ExtensionContext): string | undefined {
+    return ctx.model ? JSON.stringify([ctx.model.provider, ctx.model.id]) : undefined;
+  }
+
+  function applyPlanThinking(ctx: ExtensionContext) {
+    const key = modelKey(ctx);
+    if (!key) return;
+    if (!originalThinking.has(key)) originalThinking.set(key, pi.getThinkingLevel());
+    pi.setThinkingLevel("xhigh");
+    const level = pi.getThinkingLevel();
+    ctx.ui.notify(`Plan mode thinking: ${level}${level === "xhigh" ? "" : " (xhigh unavailable)"}.`, level === "xhigh" ? "info" : "warning");
+  }
+
+  function restoreState(ctx: ExtensionContext) {
+    if (originalTools) pi.setActiveTools(originalTools);
+    originalTools = undefined;
+    const key = modelKey(ctx);
+    const level = key ? originalThinking.get(key) : undefined;
+    if (level !== undefined) pi.setThinkingLevel(level);
+    originalThinking.clear();
+  }
 
   function render(ctx: ExtensionContext) {
     ctx.ui.setStatus("plan-mode", enabled ? ctx.ui.theme.fg("warning", "plan") : undefined);
-    if (!enabled || steps.length === 0) {
-      ctx.ui.setWidget("plan-mode", undefined);
-      return;
-    }
-    ctx.ui.setWidget("plan-mode", [
-      ctx.ui.theme.fg("accent", "Plan"),
-      ...steps.map((step, index) => `${step.completed ? "✓" : "○"} ${index + 1}. ${step.text}`),
-    ]);
+    ctx.ui.setWidget("plan-mode", undefined);
   }
 
   function setEnabled(value: boolean, ctx: ExtensionContext) {
     enabled = value;
     if (enabled) {
       originalTools ??= pi.getActiveTools();
-      pi.setActiveTools(originalTools.filter((name) => !WRITE_TOOLS.has(name)));
-      ctx.ui.notify("Plan mode: write tools disabled.", "info");
+      const available = new Set(pi.getAllTools().map((tool) => tool.name));
+      const tools = originalTools.filter((name) => READ_ONLY_TOOLS.has(name));
+      for (const name of DISCOVERY_TOOLS) {
+        if (available.has(name) && !tools.includes(name)) tools.push(name);
+      }
+      pi.setActiveTools(tools);
+      applyPlanThinking(ctx);
+      ctx.ui.notify("Plan mode: only approved inspection tools are enabled; shell commands are disabled.", "info");
     } else {
-      if (originalTools) pi.setActiveTools(originalTools);
-      originalTools = undefined;
+      restoreState(ctx);
       ctx.ui.notify("Plan mode disabled.", "info");
     }
+    pi.events.emit("plan-mode:state", enabled);
     render(ctx);
   }
+
+  pi.events.on("plan-mode:request-state", () => pi.events.emit("plan-mode:state", enabled));
+
+  pi.registerMarkdownTransformer((markdown, context) => {
+    if (context.messageType === "assistant" && !context.isStreaming && savedPlans.has(markdown.trim())) return "";
+    return markdown;
+  }, { messageTypes: ["assistant"] });
+
+  pi.registerEntryRenderer<PlanFileDisplay>("plan-file", (entry, _options, theme) => {
+    if (!entry.data || typeof entry.data.path !== "string" || typeof entry.data.content !== "string") return;
+    return renderPlanFile(entry.data, theme);
+  });
+
+  pi.registerTool({
+    name: "enter_plan_mode",
+    label: "Enter plan mode",
+    description: "Enter read-only plan mode before substantial changes that need investigation or a reviewed plan. Use for explicit planning requests or complex, risky work; do not use for simple questions or small changes. Call this tool alone. The user decides whether to approve the plan; do not execute it before approval.",
+    parameters: Type.Object({}),
+    executionMode: "sequential",
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      if (!enabled) setEnabled(true, ctx);
+      return {
+        content: [{ type: "text", text: "Plan mode enabled. Investigate without modifying files, then present a numbered plan under a Plan: heading for user review." }],
+        details: undefined,
+      };
+    },
+  });
 
   pi.registerFlag("plan", { description: "Start in read-only plan mode", type: "boolean", default: false });
   pi.registerCommand("plan", {
@@ -76,16 +121,47 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    savedPlans.clear();
+    pendingPlans.clear();
+    for (const entry of ctx.sessionManager.getBranch()) {
+      if (entry.type === "custom" && entry.customType === "plan-file" && entry.data && typeof entry.data.content === "string") {
+        savedPlans.add(entry.data.content.trim());
+      }
+    }
     if (pi.getFlag("plan") === true) setEnabled(true, ctx);
-    else render(ctx);
+    else {
+      pi.events.emit("plan-mode:state", false);
+      render(ctx);
+    }
+  });
+
+  pi.on("model_select", (_event, ctx) => {
+    if (enabled) applyPlanThinking(ctx);
+  });
+
+  pi.on("session_shutdown", (_event, ctx) => {
+    if (!enabled) return;
+    enabled = false;
+    restoreState(ctx);
+    pi.events.emit("plan-mode:state", false);
   });
 
   pi.on("tool_call", (event) => {
-    if (!enabled || event.toolName !== "bash") return;
-    const command = event.input.command;
-    if (typeof command !== "string" || !isReadOnlyCommand(command)) {
-      return { block: true, reason: "Plan mode allows only simple, read-only inspection commands. Disable it with /plan to run this command." };
+    if (enabled && !READ_ONLY_TOOLS.has(event.toolName)) {
+      return { block: true, reason: "Plan mode allows only approved inspection tools. Disable it with /plan to run this tool." };
     }
+  });
+
+  pi.on("user_bash", () => {
+    if (!enabled) return;
+    return {
+      result: {
+        output: "Plan mode disables shell commands. Disable it with /plan to run this command.",
+        exitCode: 1,
+        cancelled: false,
+        truncated: false,
+      },
+    };
   });
 
   pi.on("before_agent_start", () => {
@@ -94,27 +170,63 @@ export default function (pi: ExtensionAPI) {
       message: {
         customType: "plan-mode-context",
         display: false,
-        content: "You are in plan mode. Explore the codebase without making changes. Ask for clarification when needed. Finish with a concise numbered plan under a `Plan:` heading. Do not execute the plan.",
+        content: "You are in plan mode. Explore the codebase without making changes using the available inspection tools. Shell commands are disabled. Ask for clarification when needed. Finish with a concise numbered plan under a `Plan:` heading. Do not execute the plan.",
       },
     };
   });
 
-  pi.on("agent_end", async (event, ctx) => {
-    if (!enabled || !ctx.hasUI) return;
-    const text = [...event.messages].reverse().map(getAssistantText).find(Boolean);
-    if (!text) return;
-    const proposed = extractPlan(text);
-    if (proposed.length === 0) return;
-    steps = proposed;
-    render(ctx);
+  pi.on("message_end", async (event, ctx) => {
+    if (!enabled) return;
+    const plan = getAssistantText(event.message);
+    if (!plan || extractPlan(plan).length === 0) return;
+    try {
+      const path = await createPlanFile(options?.agentDir ?? getAgentDir(), ctx.sessionManager.getSessionId(), plan);
+      savedPlans.add(plan.trim());
+      pendingPlans.set(plan.trim(), path);
+    } catch (error) {
+      ctx.ui.notify(`Could not save plan file: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  });
 
-    const review = await reviewPlan(ctx, steps);
-    if (review.action === "apply") {
-      setEnabled(false, ctx);
-      const plan = steps.map((step, index) => `${index + 1}. ${step.text}`).join("\n");
-      pi.sendUserMessage(`Execute this approved plan in order.\n\n${plan}`, { deliverAs: "followUp" });
-    } else if (review.action === "edit" && review.revisedPlan) {
-      pi.sendUserMessage(`Revise the plan to match this version, then show it for review again. Do not execute it yet.\n\n${review.revisedPlan}`, { deliverAs: "followUp" });
+  pi.on("agent_end", async (event, ctx) => {
+    if (!enabled) return;
+    let plan = [...event.messages].reverse().map(getAssistantText).find((text) => text && pendingPlans.has(text.trim()));
+    if (!plan) return;
+    const path = pendingPlans.get(plan.trim());
+    pendingPlans.delete(plan.trim());
+    if (!path) return;
+
+    pi.appendEntry<PlanFileDisplay>("plan-file", { path, content: plan });
+    render(ctx);
+    if (ctx.mode !== "tui") return;
+
+    while (enabled) {
+      const review = await reviewPlan(ctx, plan);
+      if (review.action === "continue") return;
+      if (review.action === "edit" && review.revisedPlan) {
+        try {
+          await updatePlanFile(path, plan, review.revisedPlan);
+        } catch (error) {
+          ctx.ui.notify(`Could not update plan file: ${error instanceof Error ? error.message : String(error)}`, "error");
+          return;
+        }
+        plan = review.revisedPlan;
+        savedPlans.add(plan.trim());
+        pi.appendEntry<PlanFileDisplay>("plan-file", { path, content: plan });
+        render(ctx);
+        continue;
+      }
+      if (review.action === "apply") {
+        try {
+          if (await readFile(path, "utf8") !== plan) throw new Error("Plan file changed outside the review");
+        } catch (error) {
+          ctx.ui.notify(`Could not verify plan file: ${error instanceof Error ? error.message : String(error)}`, "error");
+          return;
+        }
+        setEnabled(false, ctx);
+        pi.sendUserMessage(`Execute this approved plan in order.\n\n${plan}`, { deliverAs: "followUp" });
+        return;
+      }
     }
   });
 }
