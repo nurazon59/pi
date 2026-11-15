@@ -21,6 +21,7 @@
       "./extensions/compact-tools.ts",
       "./extensions/contextual-ctrl-p.ts",
       "./extensions/statusline.ts",
+      "./extensions/project-memory.ts",
       "./extensions/ask-user/index.ts",
       "./extensions/plan-mode/index.ts"
     ]
