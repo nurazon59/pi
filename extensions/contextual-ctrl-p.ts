@@ -6,7 +6,9 @@ import { VimModalEditor } from "@0xkahi/pi-vim-keys/src/vim-modal-editor";
 export function renderPlanBorder(border: string, width: number, label: string, vimLabel: string, style: (text: string) => string): string {
   const labelWidth = visibleWidth(label);
   if (width < labelWidth + visibleWidth(vimLabel) + 2 || visibleWidth(border) < width) return border;
-  return style(label) + sliceByColumn(border, labelWidth, width - labelWidth);
+  const vimWidth = visibleWidth(vimLabel);
+  const vim = sliceByColumn(border, width - vimWidth, vimWidth);
+  return style(label) + vim + "\x1b[0m" + sliceByColumn(border, labelWidth, width - labelWidth - vimWidth);
 }
 
 class ContextualCtrlPEditor extends VimModalEditor {

@@ -1,16 +1,18 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { renderPlanBorder } from "../contextual-ctrl-p.ts";
 import { renderPlanFile } from "./tui.ts";
 
 export default function (pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     const vim = " NORMAL ";
-    const border = "─".repeat(32) + vim;
+    const border = "\x1b[35m" + "─".repeat(32) + "\x1b[0m\x1b[7m" + vim + "\x1b[27m";
     const width = visibleWidth(border);
     const rendered = renderPlanBorder(border, width, " PLAN ", vim, (text) => text);
-    if (!rendered.startsWith(" PLAN ") || !rendered.endsWith(vim) || visibleWidth(rendered) !== width) {
-      throw new Error("Plan label did not preserve the Vim label or width");
+    const plain = stripTerminalSequences(rendered);
+    if (!rendered.includes(vim + "\x1b[0m")) throw new Error("Vim label style leaked into the border");
+    if (!plain.startsWith(" PLAN " + vim) || plain.indexOf(vim, " PLAN ".length + vim.length) !== -1 || visibleWidth(rendered) !== width) {
+      throw new Error("Vim label was not placed only next to the plan label or width changed");
     }
     const narrow = "────" + vim;
     if (renderPlanBorder(narrow, visibleWidth(narrow), " BUILD ", vim, (text) => text) !== narrow) {
