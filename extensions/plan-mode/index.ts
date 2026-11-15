@@ -22,12 +22,26 @@ function getAssistantText(message: AgentMessage): string | undefined {
 }
 
 function extractPlan(text: string): PlanStep[] {
-  const start = text.match(/^\s*\*{0,2}Plan\*{0,2}:\s*$/im);
-  if (!start || start.index === undefined) return [];
-  const section = text.slice(start.index + start[0].length);
   const steps: PlanStep[] = [];
-  for (const match of section.matchAll(/^\s*\d+[.)]\s+(.+?)\s*$/gm)) {
-    const step = match[1].replace(/\*\*/g, "").trim();
+  let inPlan = false;
+  let fence: string | undefined;
+  for (const line of text.split(/\r?\n/)) {
+    const marker = line.match(/^[ \t]{0,3}(`{3,}|~{3,})/);
+    if (marker) {
+      if (!fence) fence = marker[1];
+      else if (marker[1][0] === fence[0] && marker[1].length >= fence.length) fence = undefined;
+      continue;
+    }
+    if (fence) continue;
+    const heading = line.trim().replace(/^#{1,6}[ \t]+/, "").replace(/\*\*/g, "").replace(/[:：][ \t]*$/, "").trim();
+    if (/^(?:plan|計画|実装計画)$/i.test(heading)) {
+      inPlan = true;
+      continue;
+    }
+    if (!inPlan) continue;
+    if (/^[ \t]{0,3}#{1,6}[ \t]+/.test(line)) break;
+    const match = line.match(/^[ \t]{0,3}(?:\d+[.)]|[-+*])[ \t]+(.+?)\s*$/);
+    const step = match?.[1].replace(/\*\*/g, "").trim();
     if (step) steps.push({ text: step, completed: false });
   }
   return steps;

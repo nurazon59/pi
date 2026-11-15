@@ -148,6 +148,27 @@ export default function (pi: ExtensionAPI) {
     assert(applied.entries.length === 1, "plan entry");
     assert(await readFile(applied.entries[0].path, "utf8") === applied.entries[0].content, "saved plan content");
 
+    for (const heading of ["## Plan:", "# Plan:", "## Plan", "**Plan:**", "**Plan**:", "## 計画", "実装計画：", "### **実装計画**"]) {
+      const formatted = setup();
+      await formatted.toggle();
+      const text = `計画を整理します。\n\n${heading}\n\n1. **D1のデータ構造を追加する**\n   - 既存データを保持する。`;
+      await formatted.finish([{ role: "assistant", content: [{ type: "text", text }] }]);
+      assert(formatted.entries.length === 1 && formatted.getSent().endsWith(text), `formatted plan triggers review: ${heading}`);
+    }
+
+    const bulleted = setup();
+    await bulleted.toggle();
+    const bulletPlan = "## 実装計画\n\n- データ構造を追加する\n- テストする";
+    await bulleted.finish([{ role: "assistant", content: [{ type: "text", text: bulletPlan }] }]);
+    assert(bulleted.entries.length === 1 && bulleted.getSent().endsWith(bulletPlan), "bulleted plan triggers review");
+
+    for (const text of ["## Plan:\n調査について確認します。", "```markdown\n## Plan:\n1. Example\n```", "## Plan:\n説明のみ。\n\n## 参考\n1. 別の項目"]) {
+      const notPlan = setup();
+      await notPlan.toggle();
+      await notPlan.finish([{ role: "assistant", content: [{ type: "text", text }] }]);
+      assert(notPlan.entries.length === 0 && !notPlan.getSent(), "non-plan does not trigger review");
+    }
+
     const edited = setup();
     edited.decisions.push("edit", "apply");
     const revised = "背景の説明。\n\nPlan:\n1. 編集後の内容\n   長い条件も残す。\n\n注意: 保存する。";
