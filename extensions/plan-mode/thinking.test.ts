@@ -84,7 +84,12 @@ export default function (pi: ExtensionAPI) {
     function assert(condition: unknown, message: string) { if (!condition) throw new Error(message); }
 
     const automatic = setup();
-    await automatic.enter();
+    const enterResult = await automatic.enter();
+    const enterPrompt = enterResult.content[0].text;
+    assert(enterPrompt.includes("unresolved design decisions"), "AI entry prompts for thorough design");
+    assert(enterPrompt.includes("ask_user"), "AI entry uses one-at-a-time user questions");
+    const continuedPrompt = await automatic.handlers.before_agent_start({ systemPrompt: "base" }, automatic.ctx);
+    assert(continuedPrompt.message.content.includes("unresolved design decisions"), "design prompt persists across turns");
     assert(automatic.getLevel() === "xhigh" && !automatic.getTools().includes("bash"), "AI entry");
     assert(automatic.events.some((event) => event.channel === "plan-mode:state" && event.data === true), "plan state event");
     await automatic.toggle();
@@ -93,6 +98,8 @@ export default function (pi: ExtensionAPI) {
 
     const manual = setup();
     await manual.toggle();
+    const manualPrompt = await manual.handlers.before_agent_start({ systemPrompt: "base" }, manual.ctx);
+    assert(!manualPrompt.message.content.includes("unresolved design decisions"), "manual plan mode keeps its existing prompt");
     assert(manual.getLevel() === "xhigh", "manual enable");
     await manual.toggle();
     assert(manual.getLevel() === "high" && manual.getTools().includes("bash"), "manual restore");

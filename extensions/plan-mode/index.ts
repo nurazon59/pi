@@ -12,6 +12,14 @@ const READ_ONLY_TOOLS = new Set([
   "memory_read", "memory_search", "ask_user",
 ]);
 const DISCOVERY_TOOLS = ["grep", "find", "ls"];
+const PLAN_MODE_CONTEXT = "You are in plan mode. Explore the codebase without making changes using the available inspection tools. Shell commands are disabled. Ask for clarification when needed. Finish with a concise numbered plan under a `Plan:` heading. Do not execute the plan.";
+const DESIGN_MODE_CONTEXT = `You are in design mode, entered because the user wants the design thoroughly worked through before implementation. Do not rush to produce a plan.
+
+First inspect the relevant code and trace its responsibilities, constraints, and execution flow. Separate facts established by the code from assumptions and decisions that need the user's input. Resolve questions through repository inspection whenever possible; use ask_user to ask the user one focused question at a time when a material product or design choice cannot be established from the code. Incorporate each answer, then continue investigating and ask follow-up questions where it reveals further unresolved choices.
+
+Systematically examine the aspects relevant to this change, including requirements and non-goals, boundaries and responsibilities, data and state, invariants, important flows, edge cases and failure behavior, compatibility or migration, security or performance implications, and verification. Compare meaningful alternatives and explain their trade-offs when a choice matters. Do not invent answers or treat unresolved material choices as settled.
+
+The design is ready only when no unresolved design decisions that could materially change the implementation remain. Then summarize the agreed design, relevant trade-offs, and any remaining uncertainties or risks, followed by a concise numbered implementation plan under a \`Plan:\` heading for user review. Do not modify files or execute the plan.`;
 
 function getAssistantText(message: AgentMessage): string | undefined {
   if (message.role !== "assistant" || !Array.isArray(message.content)) return;
@@ -49,6 +57,7 @@ function extractPlan(text: string): PlanStep[] {
 
 export default function (pi: ExtensionAPI, options?: { agentDir?: string }) {
   let enabled = false;
+  let designMode = false;
   let originalTools: string[] | undefined;
   const originalThinking = new Map<string, ReturnType<ExtensionAPI["getThinkingLevel"]>>();
   const savedPlans = new Set<string>();
@@ -94,6 +103,7 @@ export default function (pi: ExtensionAPI, options?: { agentDir?: string }) {
       applyPlanThinking(ctx);
       ctx.ui.notify("Plan mode: only approved inspection tools are enabled; shell commands are disabled.", "info");
     } else {
+      designMode = false;
       restoreState(ctx);
       ctx.ui.notify("Plan mode disabled.", "info");
     }
@@ -120,9 +130,10 @@ export default function (pi: ExtensionAPI, options?: { agentDir?: string }) {
     parameters: Type.Object({}),
     executionMode: "sequential",
     async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      designMode = true;
       if (!enabled) setEnabled(true, ctx);
       return {
-        content: [{ type: "text", text: "Plan mode enabled. Investigate without modifying files, then present a numbered plan under a Plan: heading for user review." }],
+        content: [{ type: "text", text: DESIGN_MODE_CONTEXT }],
         details: undefined,
       };
     },
@@ -131,10 +142,14 @@ export default function (pi: ExtensionAPI, options?: { agentDir?: string }) {
   pi.registerFlag("plan", { description: "Start in read-only plan mode", type: "boolean", default: false });
   pi.registerCommand("plan", {
     description: "Toggle read-only plan mode",
-    handler: async (_args, ctx) => setEnabled(!enabled, ctx),
+    handler: async (_args, ctx) => {
+      designMode = false;
+      setEnabled(!enabled, ctx);
+    },
   });
 
   pi.on("session_start", (_event, ctx) => {
+    designMode = false;
     savedPlans.clear();
     pendingPlans.clear();
     for (const entry of ctx.sessionManager.getBranch()) {
@@ -154,6 +169,7 @@ export default function (pi: ExtensionAPI, options?: { agentDir?: string }) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    designMode = false;
     if (!enabled) return;
     enabled = false;
     restoreState(ctx);
@@ -184,7 +200,7 @@ export default function (pi: ExtensionAPI, options?: { agentDir?: string }) {
       message: {
         customType: "plan-mode-context",
         display: false,
-        content: "You are in plan mode. Explore the codebase without making changes using the available inspection tools. Shell commands are disabled. Ask for clarification when needed. Finish with a concise numbered plan under a `Plan:` heading. Do not execute the plan.",
+        content: designMode ? DESIGN_MODE_CONTEXT : PLAN_MODE_CONTEXT,
       },
     };
   });
