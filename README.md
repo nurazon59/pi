@@ -8,6 +8,7 @@ Personal [Pi](https://pi.dev/) extensions.
 - `ask-user`: interactive question UI
 - `plan-mode`: planning and review UI
 - `compact-tools`: compact tool rendering
+- `clear`: `/clear` alias for `/new`
 - `contextual-ctrl-p`: Vim editor and contextual Ctrl+P behavior
 - `project-memory`: personal project-specific memory loaded at session start
 
